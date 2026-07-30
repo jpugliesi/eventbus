@@ -4,29 +4,30 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A Postgres-backed transactional event queue for Go. Publish an event inside
-your own database transaction and it's guaranteed to be delivered — no
+your own database transaction and it's guaranteed to be delivered: no
 dual-write, no separate broker, no dropped events when a process crashes
 mid-write.
 
 `eventbus` gives you:
 
-- **A real transactional outbox** — `Publish`/`PublishBatch` can join your
+- **A real transactional outbox.** `Publish`/`PublishBatch` can join your
   existing `pgx` transaction (`WithTransaction`), so an event and the business
   row that triggered it commit or roll back together.
 - **Competing-consumer drain** via `SELECT ... FOR UPDATE SKIP LOCKED`,
   batch-claimed for throughput.
-- **Per-partition-key ordering** — deliveries sharing a key are processed in
+- **Per-partition-key ordering.** Deliveries sharing a key are processed in
   publish order within a consumer; everything else runs in parallel up to the
   consumer's configured concurrency.
-- **Copy-on-publish fan-out** — one `Publish` call becomes one delivery per
-  subscribed consumer. Multiple independent consumers each get their own copy
-  of every event.
-- **Bounded retry with a dead-letter queue**, and a **janitor** that garbage
-  collects terminal rows, stale partition locks, and abandoned subscriptions.
+- **Copy-on-publish fan-out.** One `Publish` call becomes one delivery per
+  subscribed consumer, and multiple independent consumers each get their own
+  copy of every event.
+- **Bounded retry with a dead-letter queue**, plus a **janitor** that
+  garbage-collects terminal rows, stale partition locks, and abandoned
+  subscriptions.
 
 It depends on nothing but [`pgx/v5`](https://github.com/jackc/pgx) and the
-standard library — no separate broker, no code generator, no CLI, no
-migration tool. `~1,200` lines of production Go.
+standard library: no separate broker, no code generator, no CLI, no migration
+tool. `~1,200` lines of production Go.
 
 ## Install
 
@@ -80,8 +81,8 @@ func sendOrderConfirmation(ctx context.Context, payload []byte) error { return n
 
 ### Transactional outbox
 
-The whole point of an outbox: the event and the write that caused it share one
-atomic fate.
+An outbox exists so the event and the write that caused it share one atomic
+fate.
 
 ```go
 tx, err := pool.Begin(ctx)
@@ -145,19 +146,19 @@ func TestCreateOrderPublishesEvent(t *testing.T) {
 
 Three tables, created and kept up to date automatically by `Client.EnsureSchema`:
 
-- **`eventbus.deliveries`** — one row per `(consumer, event)` pair. A publish
+- **`eventbus.deliveries`.** One row per `(consumer, event)` pair. A publish
   to a topic with two subscribed consumers writes two delivery rows, so each
   consumer's queue is independent of the others.
-- **`eventbus.partitions`** — a serial lock per `(consumer, partition_key)`,
+- **`eventbus.partitions`.** A serial lock per `(consumer, partition_key)`,
   the mechanism that gives keyed deliveries in-order processing.
-- **`eventbus.subscriptions`** — the topic → consumer routing table, kept
+- **`eventbus.subscriptions`.** The topic → consumer routing table, kept
   current by `RegisterSubscriptions`.
 
-Drain is **claim → process → finalize**, all batched: `RunOnce` claims up to
-`WithClaimBatchSize` (default 500) rows in one round trip — keyed claims
-dedup to one head-of-line delivery per free partition key, so ordering never
-depends on processing order within the batch — runs handlers concurrently up
-to each consumer's `Concurrency`, then finalizes the whole batch (delete or
+Drain is **claim → process → finalize**, all batched. `RunOnce` claims up to
+`WithClaimBatchSize` (default 500) rows in one round trip. Keyed claims dedup
+to one head-of-line delivery per free partition key, so ordering never
+depends on processing order within the batch. Handlers then run concurrently
+up to each consumer's `Concurrency`, and the whole batch finalizes (delete or
 retry-schedule) in one more round trip.
 
 Delivery is **at-least-once**: a handler can run more than once for the same
@@ -168,17 +169,17 @@ worker can't have its keyed delivery reclaimed out of order; the `Janitor`
 rescues timed-out deliveries and frees stale locks in the order that
 preserves this.
 
-There's no LISTEN/NOTIFY — `Run` is a plain poll loop (`WithPollInterval`,
-default 1s), or call `RunOnce` yourself on whatever schedule you like (a cron
-job, a Lambda invocation, a test). This trades a little latency for a much
-simpler operational model: no long-lived listening connection to keep alive,
-no notification-payload size limit to work around.
+There's no LISTEN/NOTIFY. `Run` is a plain poll loop (`WithPollInterval`,
+default 1s); you can also call `RunOnce` yourself on whatever schedule you
+like (a cron job, a Lambda invocation, a test). That trades a little latency
+for a simpler operational model: no long-lived listening connection to keep
+alive, no notification-payload size limit to work around.
 
 ## Performance
 
 `BenchmarkDrain` (see `bench_test.go`) measures end-to-end throughput draining
-a 2,000-delivery backlog. Batching the claim and finalize steps — rather than
-claiming and finalizing one delivery at a time — is most of the win:
+a 2,000-delivery backlog. Batching the claim and finalize steps, rather than
+claiming and finalizing one delivery at a time, is most of the win:
 
 | path                    | naive (per-delivery) | batched  | speedup |
 | ----------------------- | --------------------:| --------:| -------:|
@@ -189,7 +190,7 @@ claiming and finalizing one delivery at a time — is most of the win:
 which is what the default of 500 is set from. `TestKeyedClaimUsesIndex` runs
 `EXPLAIN (ANALYZE, BUFFERS)` on the per-partition claim query and asserts it
 hits the `deliveries_claim` partial index rather than sequential-scanning the
-table — the claim path's cost doesn't grow with backlog size.
+table, so the claim path's cost doesn't grow with backlog size.
 
 Run it yourself:
 
@@ -197,13 +198,13 @@ Run it yourself:
 make bench
 ```
 
-(Numbers above are from the benchmark's original development machine and will
-vary with your hardware — `make bench` reproduces them locally.)
+(Numbers above are from the benchmark's original development machine; yours
+will vary by hardware. Run `make bench` to reproduce them locally.)
 
 ## Design notes and prior art
 
-Two mechanisms are borrowed from — and credited to, in the source comments —
-existing Postgres-queue designs from the Node.js ecosystem:
+Two mechanisms are borrowed from existing Postgres-queue designs in the
+Node.js ecosystem, credited by name in the source comments:
 
 - The `eventbus.partitions` per-key serial lock table is the same idea as
   [graphile-worker](https://github.com/graphile/worker)'s `job_queues` table.
@@ -212,29 +213,29 @@ existing Postgres-queue designs from the Node.js ecosystem:
   fetching one job per key.
 
 **How this differs from [River](https://github.com/riverqueue/river)** (the
-most prominent Go/Postgres job-queue library): River and `eventbus` both use
+most prominent Go/Postgres job-queue library). River and `eventbus` both use
 `SKIP LOCKED` and both support enqueueing within a caller's existing
-transaction, so the "transactional outbox" property isn't a differentiator —
-River has it too (`InsertTx`). The real difference is shape and scope:
+transaction, so "transactional outbox" isn't the differentiator: River has it
+too, via `InsertTx`. The real difference is shape and scope:
 
 - **Job queue vs. event bus.** River executes a job exactly once, picked up
   by one worker. `eventbus` is copy-on-publish: one `Publish` to a topic with
-  three subscribed consumers produces three independent deliveries — it's
+  three subscribed consumers produces three independent deliveries. It's
   built for "many things need to react to this event," not "run this one
   task."
 - **Footprint.** River ships a full job-processing system: a CLI, a
   migration tool, cron/periodic jobs, unique jobs, batch insertion via
-  `COPY`, and a web UI (River UI). `eventbus` is deliberately just the
-  queue primitive — a library you embed, with no surrounding tooling. If you
-  want a scheduler, a dashboard, or telemetry, you bring your own.
+  `COPY`, and a web UI (River UI). `eventbus` is deliberately just the queue
+  primitive, a library you embed with no surrounding tooling. Bring your own
+  scheduler, dashboard, or telemetry.
 - **Ordering.** Per-partition-key strict ordering is a first-class,
   benchmarked feature of `eventbus` (see Performance above); it isn't River's
   primary design point.
 
-If you need River's fuller feature set — periodic jobs, a UI, a CLI — use
-River. If you want a small, dependency-free primitive to bolt a transactional
-outbox and a multi-consumer event bus onto a service that's already using
-Postgres, that's what this is for.
+If you need River's fuller feature set (periodic jobs, a UI, a CLI), use
+River. If you want a small, dependency-free primitive that bolts a
+transactional outbox and a multi-consumer event bus onto a service already
+running Postgres, that's what this is for.
 
 ## License
 
